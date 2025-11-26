@@ -1,144 +1,129 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sticker Scanner with Excel Export</title>
+    <title>OCR Scanner with Zoom + Filters + Excel Export</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-
-<style>
-  body { font-family: Arial; }
-  video { width: 100%; }
-  #controls { margin-top: 15px; }
-  #controls label { font-size: 16px; display:block; margin-top:10px; }
-  #result {
-    margin-top: 15px;
-    font-size: 28px;
-    font-weight: bold;
-    color: green;
-  }
-</style>
+    <style>
+        video {
+            width: 100%;
+            max-height: 380px;
+            object-fit: cover;
+            border: 2px solid black;
+            border-radius: 10px;
+        }
+        canvas { display: none; }
+        #resultBox {
+            margin-top: 20px;
+            font-size: 22px;
+            font-weight: bold;
+            padding: 10px;
+            border: 2px solid green;
+            border-radius: 10px;
+        }
+        .controls {
+            margin-top: 15px;
+        }
+    </style>
 </head>
+
 <body>
 
-<h2>Sticker Number Scanner</h2>
+<h2>OCR Scanner – Zoom + Filter + Excel Export</h2>
 
-<button onclick="startCamera()">Start Camera</button>
+<video id="camera" autoplay playsinline></video>
+<canvas id="canvas"></canvas>
 
-<video id="video" autoplay playsinline></video>
+<div class="controls">
+    <label>Zoom: </label>
+    <input type="range" id="zoomSlider" min="1" max="4" step="0.1" value="1">
 
-<div id="controls">
-  <label>Zoom:
-    <input type="range" id="zoomSlider" min="1" max="10" step="0.1" value="1" oninput="applyZoom()">
-  </label>
+    <br><br>
 
-  <label>Brightness:
-    <input type="range" id="brightSlider" min="0" max="300" value="100" oninput="updateFilters()">
-  </label>
+    <label>Brightness:</label>
+    <input type="range" id="brightnessSlider" min="50" max="200" value="100">
+    <br>
 
-  <label>Contrast:
-    <input type="range" id="contrastSlider" min="50" max="300" value="150" oninput="updateFilters()">
-  </label>
-
-  <label>Grayscale:
-    <input type="range" id="graySlider" min="0" max="100" value="0" oninput="updateFilters()">
-  </label>
+    <label>Contrast:</label>
+    <input type="range" id="contrastSlider" min="50" max="200" value="100">
 </div>
 
-<button onclick="capture()">Scan</button>
-<button onclick="downloadExcel()">Download Excel</button>
+<br>
 
-<canvas id="canvas" style="display:none;"></canvas>
+<button id="scanBtn">Scan Text</button>
+<button id="downloadExcel">Download Excel</button>
 
-<div id="result"></div>
+<div id="resultBox">Detected: (empty)</div>
 
 <script>
-let stream;
-let maxZoom = 1;
-let scannedList = [];   // Store all scanned numbers
+    const video = document.getElementById("camera");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+    const resultBox = document.getElementById("resultBox");
 
-async function startCamera() {
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: "environment" }
-  });
+    let detectedValues = [];
 
-  const video = document.getElementById("video");
-  video.srcObject = stream;
+    // Improved camera quality
+    navigator.mediaDevices.getUserMedia({
+        video: {
+            facingMode: "environment",
+            width: { ideal: 1920 },
+            height: { ideal: 1080 }
+        }
+    }).then(stream => {
+        video.srcObject = stream;
+    });
 
-  const track = stream.getVideoTracks()[0];
-  const cap = track.getCapabilities();
+    function applyFilters() {
+        let brightness = document.getElementById("brightnessSlider").value;
+        let contrast = document.getElementById("contrastSlider").value;
 
-  if (cap.zoom) {
-    maxZoom = cap.zoom.max;
-    document.getElementById("zoomSlider").max = maxZoom;
-  }
-}
-
-function applyZoom() {
-  const zoomValue = parseFloat(document.getElementById("zoomSlider").value);
-  const track = stream.getVideoTracks()[0];
-
-  track.applyConstraints({
-    advanced: [{ zoom: zoomValue }]
-  });
-}
-
-function updateFilters() {
-  const b = document.getElementById("brightSlider").value;
-  const c = document.getElementById("contrastSlider").value;
-  const g = document.getElementById("graySlider").value;
-
-  document.getElementById("video").style.filter =
-    `brightness(${b}%) contrast(${c}%) grayscale(${g}%)`;
-}
-
-async function capture() {
-  const video = document.getElementById("video");
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
-
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
-
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-  const result = await Tesseract.recognize(canvas, "eng");
-
-  const match = result.data.text.match(/[0-9]{9}[A-Z]{2}/);
-
-  if (match) {
-    const code = match[0];
-    document.getElementById("result").innerText = "Detected: " + code;
-
-    // Add to list (avoid duplicates in a row)
-    if (scannedList[scannedList.length - 1] !== code) {
-      scannedList.push(code);
+        video.style.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
     }
-  }
-}
 
-// --------------------------
-// DOWNLOAD EXCEL FUNCTION
-// --------------------------
-function downloadExcel() {
-  if (scannedList.length === 0) {
-    alert("No data to download.");
-    return;
-  }
+    document.getElementById("brightnessSlider").oninput = applyFilters;
+    document.getElementById("contrastSlider").oninput = applyFilters;
 
-  const wsData = [["Sticker Number"]];
+    document.getElementById("scanBtn").onclick = async function () {
+        let zoom = document.getElementById("zoomSlider").value;
 
-  scannedList.forEach(num => {
-    wsData.push([num]);
-  });
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
 
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Scans");
+        ctx.drawImage(
+            video,
+            canvas.width / 2 - (canvas.width / (2 * zoom)),
+            canvas.height / 2 - (canvas.height / (2 * zoom)),
+            canvas.width / zoom,
+            canvas.height / zoom,
+            0,
+            0,
+            canvas.width,
+            canvas.height
+        );
 
-  XLSX.writeFile(wb, "Sticker_Scan_List.xlsx");
-}
+        const dataURL = canvas.toDataURL("image/png");
+
+        const result = await Tesseract.recognize(dataURL, 'eng', {
+            tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789',
+        });
+
+        let text = result.data.text.replace(/[^A-Z0-9]/g, "").trim();
+
+        resultBox.innerHTML = "Detected: " + text;
+
+        if (text.length > 0) {
+            detectedValues.push(text);
+        }
+    };
+
+    document.getElementById("downloadExcel").onclick = function () {
+        let wb = XLSX.utils.book_new();
+        let ws = XLSX.utils.aoa_to_sheet([["Detected Numbers"], ...detectedValues.map(v => [v])]);
+        XLSX.utils.book_append_sheet(wb, ws, "Data");
+        XLSX.writeFile(wb, "scanned_data.xlsx");
+    }
 </script>
 
 </body>
