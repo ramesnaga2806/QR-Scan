@@ -1,1 +1,87 @@
-# QR-Scan
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Live Camera Number Scanner to Excel</title>
+
+<script src="https://unpkg.com/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.19.3/dist/xlsx.full.min.js"></script>
+
+<style>
+  body { font-family: Arial; padding: 20px; }
+  video { width: 100%; max-width: 350px; border: 1px solid #ccc; border-radius: 10px; }
+  #result { margin-top: 15px; padding: 10px; border: 1px solid #ccc; }
+  button { padding: 12px; margin-top: 10px; width: 100%; font-size: 18px; }
+</style>
+
+</head>
+<body>
+
+<h2>Live Camera → Scan Number → Auto Excel Download</h2>
+
+<video id="camera" autoplay playsinline></video>
+<button id="captureBtn">SCAN</button>
+
+<div id="result">Waiting for scan…</div>
+
+<script>
+const video = document.getElementById("camera");
+
+// Start camera immediately
+navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+.then(stream => { video.srcObject = stream; })
+.catch(err => alert("Camera error: " + err));
+
+document.getElementById("captureBtn").addEventListener("click", async () => {
+    document.getElementById("result").textContent = "Reading number…";
+
+    // Capture the frame into canvas
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d");
+    ctx.drawImage(video, 0, 0);
+
+    const dataURL = canvas.toDataURL("image/png");
+
+    // OCR (fast because whitelist)
+    const { createWorker } = Tesseract;
+    const worker = createWorker();
+
+    await worker.load();
+    await worker.loadLanguage("eng");
+    await worker.initialize("eng");
+    await worker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    });
+
+    const { data: { text } } = await worker.recognize(dataURL);
+    await worker.terminate();
+
+    // Clean the detected text
+    let code = text.replace(/[^A-Z0-9]/gi, "").trim();
+
+    if (!code) {
+        document.getElementById("result").textContent = "❌ No number detected. Try closer photo.";
+        return;
+    }
+
+    document.getElementById("result").textContent = "✔ Detected: " + code;
+
+    // Create Excel file
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.aoa_to_sheet([["Scanned Number"], [code]]);
+    XLSX.utils.book_append_sheet(wb, ws, "Scan");
+
+    const excelFile = XLSX.write(wb, { bookType: "xlsx", type: "array" });
+    const blob = new Blob([excelFile], { type: "application/octet-stream" });
+
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = "scan_result.xlsx";
+    link.click();
+});
+</script>
+
+</body>
+</html>
