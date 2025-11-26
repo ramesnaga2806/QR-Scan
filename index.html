@@ -1,235 +1,98 @@
-<!doctype html>
-<html lang="en">
+<!DOCTYPE html>
+<html>
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>QR + Serial Detector</title>
+<meta charset="UTF-8">
+<title>Sticker-Only Scanner</title>
+
+<script src="https://unpkg.com/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+
 <style>
-  body { font-family: system-ui, -apple-system, Roboto, Arial; padding: 16px; max-width: 900px; margin: auto; }
-  video, canvas { max-width: 100%; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,.12); }
-  .row { display:flex; gap:10px; align-items:center; margin-bottom:10px; flex-wrap:wrap; }
-  #result { white-space:pre-wrap; padding:8px; background:#f6f7fb; border:1px solid #e2e3f0; border-radius:6px; }
-  button { padding:8px 12px; border-radius:6px; border:1px solid #ccc; background:#fff; cursor:pointer; }
-  .note { color:#666; font-size:0.9em; }
+  body { font-family: Arial; padding: 20px; }
+  video { width: 100%; max-width: 350px; border: 1px solid #ccc; border-radius: 10px; }
+  #result { margin-top: 15px; padding: 10px; border: 1px solid #ccc; }
+  button { padding: 12px; margin-top: 10px; width: 100%; font-size: 18px; }
+  .scan-area {
+    position: absolute;
+    border: 3px solid red;
+    width: 70%;
+    height: 22%;
+    bottom: 15%;
+    left: 15%;
+    pointer-events: none;
+  }
+  #wrapper {
+    position: relative;
+    display: inline-block;
+  }
 </style>
+
 </head>
 <body>
-  <h1>QR + Serial Detector</h1>
 
-  <div class="row">
-    <button id="startCam">Start Camera</button>
-    <button id="stopCam" disabled>Stop Camera</button>
-    <input id="fileInput" type="file" accept="image/*">
-    <button id="tryOCR">OCR Selected Image</button>
-  </div>
+<h2>Sticker-Only Detection Scanner</h2>
 
-  <div class="row">
-    <video id="video" autoplay playsinline style="display:none;"></video>
-    <canvas id="canvas" style="display:none;"></canvas>
-    <img id="preview" alt="" style="display:none; max-height:360px;">
-  </div>
+<div id="wrapper">
+  <video id="camera" autoplay playsinline></video>
+  <!-- This red box shows the scanning zone -->
+  <div class="scan-area"></div>
+</div>
 
-  <div class="row">
-    <div style="flex:1">
-      <strong>Result:</strong>
-      <div id="result">No result yet.</div>
-      <div class="note">This will detect standard QR (or DataMatrix if supported) with jsQR. For printed serial numbers it will attempt OCR.</div>
-    </div>
-  </div>
+<button id="scanBtn">SCAN STICKER</button>
+<div id="result">Waiting for scan…</div>
 
-  <!-- Libraries -->
-  <script src="https://unpkg.com/jsqr@1.4.0/dist/jsQR.js"></script>
-  <script src="https://unpkg.com/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
+<script>
+const video = document.getElementById("camera");
 
-  <script>
-  // Elements
-  const startCamBtn = document.getElementById('startCam');
-  const stopCamBtn = document.getElementById('stopCam');
-  const fileInput = document.getElementById('fileInput');
-  const preview = document.getElementById('preview');
-  const video = document.getElementById('video');
-  const canvas = document.getElementById('canvas');
-  const resultBox = document.getElementById('result');
-  const tryOCRBtn = document.getElementById('tryOCR');
+// Start camera
+navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
+.then(stream => { video.srcObject = stream; })
+.catch(err => alert("Camera error: " + err));
 
-  let stream = null;
-  let scanning = false;
-  const ctx = canvas.getContext('2d');
+document.getElementById("scanBtn").addEventListener("click", async () => {
+    document.getElementById("result").textContent = "Reading sticker…";
 
-  function log(msg) {
-    resultBox.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
-  }
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
 
-  // Start camera and scanning loop
-  startCamBtn.addEventListener('click', async () => {
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
-      video.srcObject = stream;
-      video.style.display = '';
-      canvas.style.display = 'none';
-      preview.style.display = 'none';
-      startCamBtn.disabled = true;
-      stopCamBtn.disabled = false;
-      scanning = true;
-      requestAnimationFrame(scanLoop);
-      log('Camera started — pointing at the code.');
-    } catch (err) {
-      log('Camera error: ' + err.message);
-    }
-  });
+    // Crop only the sticker area (bottom middle)
+    const cropWidth = vw * 0.70;
+    const cropHeight = vh * 0.22;
+    const cropX = vw * 0.15;
+    const cropY = vh * 0.63;
 
-  stopCamBtn.addEventListener('click', () => {
-    if (stream) {
-      stream.getTracks().forEach(t => t.stop());
-      stream = null;
-    }
-    video.style.display = 'none';
-    startCamBtn.disabled = false;
-    stopCamBtn.disabled = true;
-    scanning = false;
-    log('Camera stopped.');
-  });
+    const canvas = document.createElement("canvas");
+    canvas.width = cropWidth;
+    canvas.height = cropHeight;
+    const ctx = canvas.getContext("2d");
 
-  // Scan loop: draw video frame to canvas and try jsQR
-  function scanLoop() {
-    if (!scanning) return;
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      // draw to canvas at video size
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
 
-      // attempt to find a QR code
-      try {
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
-        if (code) {
-          // found a standard QR
-          drawDetection(code.location);
-          log("QR detected:\n" + code.data);
-          // stop scanning automatically (optional)
-          // scanning = false;
-        } else {
-          log("No standard QR detected in frame. Keep pointing camera or try upload.");
-        }
-      } catch (e) {
-        log("Error scanning frame: " + e.message);
-      }
-    }
-    requestAnimationFrame(scanLoop);
-  }
+    const dataURL = canvas.toDataURL("image/png");
 
-  // Draw green lines around detected QR
-  function drawDetection(loc) {
-    if (!loc) return;
-    ctx.lineWidth = 4;
-    ctx.strokeStyle = "lime";
-    function line(a, b) { ctx.beginPath(); ctx.moveTo(a.x, a.y); ctx.lineTo(b.x, b.y); ctx.stroke(); }
-    line(loc.topLeftCorner, loc.topRightCorner);
-    line(loc.topRightCorner, loc.bottomRightCorner);
-    line(loc.bottomRightCorner, loc.bottomLeftCorner);
-    line(loc.bottomLeftCorner, loc.topLeftCorner);
-  }
+    const { createWorker } = Tesseract;
+    const worker = createWorker();
 
-  // File upload preview & detection
-  fileInput.addEventListener('change', async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const url = URL.createObjectURL(file);
-    preview.src = url;
-    preview.style.display = '';
-    video.style.display = 'none';
-    canvas.style.display = 'none';
-    log('Loaded image — trying to detect QR...');
-    await detectFromImageElement(preview);
-  });
+    // Restrict OCR to sticker content characters only
+    await worker.load();
+    await worker.loadLanguage("eng");
+    await worker.initialize("eng");
+    await worker.setParameters({
+        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    });
 
-  async function detectFromImageElement(imgEl) {
-    // draw image to canvas
-    canvas.width = imgEl.naturalWidth || imgEl.width;
-    canvas.height = imgEl.naturalHeight || imgEl.height;
-    ctx.drawImage(imgEl, 0, 0, canvas.width, canvas.height);
+    const { data: { text } } = await worker.recognize(dataURL);
+    await worker.terminate();
 
-    // try QR
-    try {
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "attemptBoth" });
-      if (code) {
-        drawDetection(code.location);
-        canvas.style.display = '';
-        log("QR detected:\n" + code.data);
+    let code = text.replace(/[^A-Z0-9]/gi, "").trim();
+
+    if (!code) {
+        document.getElementById("result").textContent = "❌ Unable to detect sticker info. Make sure the number is inside the red box.";
         return;
-      } else {
-        log("No standard QR found in the image. You can try OCR for serial text below.");
-      }
-    } catch(e) {
-      log("Error scanning image: " + e.message);
-    }
-  }
-
-  // OCR button: runs Tesseract.js on the current preview or canvas
-  tryOCRBtn.addEventListener('click', async () => {
-    // choose source: preview image or canvas from camera
-    let sourceCanvas;
-    if (preview.style.display !== 'none' && preview.src) {
-      // draw preview into canvas (resize to reasonable size)
-      const MAX = 1200;
-      const img = new Image();
-      img.src = preview.src;
-      await new Promise(r => img.onload = r);
-      const scale = Math.min(1, MAX / Math.max(img.naturalWidth, img.naturalHeight));
-      canvas.width = Math.round(img.naturalWidth * scale);
-      canvas.height = Math.round(img.naturalHeight * scale);
-      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-      sourceCanvas = canvas;
-    } else if (video.style.display !== 'block' && video.style.display !== '' && canvas.width && canvas.height) {
-      // nothing to OCR
-      log("No image to OCR. Please upload an image or use the camera then pause a frame (take a screenshot).");
-      return;
-    } else {
-      // if camera running use the last captured frame
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      sourceCanvas = canvas;
     }
 
-    log("Running OCR (Tesseract). This can take several seconds...");
-    try {
-      // crop area option: if you want faster OCR, crop to the bottom-right region where serial often lives.
-      // For generality we OCR the whole canvas.
-      const dataURL = sourceCanvas.toDataURL('image/png');
+    document.getElementById("result").textContent = "✔ Sticker Info: " + code;
+});
+</script>
 
-      const { createWorker } = Tesseract;
-      const worker = createWorker({
-        logger: m => {
-          // optional: progress updates
-          if (m.status === 'recognizing text') log(`OCR: ${Math.round(m.progress * 100)}%`);
-        }
-      });
-
-      await worker.load();
-      await worker.loadLanguage('eng');
-      await worker.initialize('eng');
-      // you can restrict characters to alphanumerics to improve accuracy:
-      // await worker.setParameters({ tessjs_create_hocr: '0', tessedit_char_whitelist: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-' });
-
-      const { data: { text } } = await worker.recognize(dataURL);
-      await worker.terminate();
-
-      if (text && text.trim().length > 0) {
-        log("OCR result:\n" + text.trim());
-      } else {
-        log("OCR ran but no clear text found. Try a sharper, closer photo of the serial area.");
-      }
-    } catch (ocrErr) {
-      log("OCR error: " + ocrErr.message);
-    }
-  });
-
-  // Allow clicking the preview to run detection (optional)
-  preview.addEventListener('click', () => detectFromImageElement(preview));
-
-  </script>
 </body>
 </html>
