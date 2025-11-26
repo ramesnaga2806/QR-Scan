@@ -4,238 +4,242 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
     <title>Mobile KKM Scanner</title>
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+
+    <!-- Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
     <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+
     <style>
         body { 
-            background-color: #000; 
-            color: #fff; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-            margin: 0; 
-            height: 100vh;
-            display: flex;
-            flex-direction: column;
+            margin:0; padding:0; height:100vh; background:#000; color:#fff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            display:flex; flex-direction:column; overflow:hidden;
         }
-
-        /* 1. Camera Section (Top Half) */
-        .cam-area {
-            position: relative;
-            flex: 1; /* Takes up available space */
-            background: #222;
-            overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-        video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-        /* The Green Target Box */
+        .cam-area { position:relative; flex:1; background:#000; overflow:hidden; }
+        video { width:100%; height:100%; object-fit:cover; }
         .scan-box {
-            position: absolute;
-            width: 80%;
-            height: 50px;
-            border: 3px solid #00ff00;
-            box-shadow: 0 0 0 100vmax rgba(0,0,0,0.6); /* Darkens the rest */
-            z-index: 10;
+            position:absolute; top:50%; left:10%; right:10%; transform:translateY(-50%);
+            height:56px; border:3px solid #00ff00; box-shadow:0 0 0 100vmax rgba(0,0,0,0.7);
+            z-index:10;
         }
         .scan-box::after {
-            content: "Align Number Here";
-            position: absolute; top: -25px; left: 0; width: 100%; 
-            text-align: center; font-size: 14px; font-weight: bold; text-shadow: 1px 1px 2px black;
+            content:"ALIGN CODE HERE"; position:absolute; top:-30px; left:0; width:100%;
+            text-align:center; font-weight:bold; font-size:14px; color:#00ff00; text-shadow:0 0 10px #000;
         }
 
-        /* 2. Controls Section (Bottom Half) */
-        .controls {
-            flex: 1;
-            background: #111;
-            padding: 20px;
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-            border-top: 2px solid #333;
+        .controls { 
+            flex:1; background:#111; padding:20px; display:flex; flex-direction:column; gap:15px;
+            border-top:2px solid #333;
         }
+        #status { text-align:center; font-size:20px; font-weight:bold; color:#ffeb3b; }
 
-        /* Debug Canvas (Hidden but used for processing) */
-        .debug-row { display: flex; justify-content: center; margin-bottom: 5px; }
         canvas { 
-            border: 2px solid #fff; 
-            height: 50px; 
-            width: 250px; 
-            background: #000; 
+            border:2px solid #444; height:56px; width:280px; background:#000; 
+            image-rendering: pixelated;
         }
 
-        /* Sliders */
-        .slider-row { display: flex; flex-direction: column; gap: 5px; }
-        label { font-size: 14px; color: #aaa; }
-        input[type=range] { width: 100%; height: 30px; }
+        .slider-row label { font-size:14px; color:#aaa; }
+        input[type=range] { width:100%; height:34px; }
 
-        /* Big Buttons for Thumbs */
-        .btn-row { display: flex; gap: 10px; margin-top: auto; }
+        .btn-row { display:flex; gap:12px; margin-top:auto; }
         button {
-            flex: 1;
-            padding: 20px;
-            border: none;
-            border-radius: 12px;
-            font-size: 18px;
-            font-weight: bold;
+            flex:1; padding:20px; border:none; border-radius:12px;
+            font-size:18px; font-weight:bold; cursor:pointer;
         }
-        .btn-scan { background: #00ff00; color: #000; }
-        .btn-dl { background: #2196F3; color: #fff; }
-        button:active { transform: scale(0.98); }
-
-        /* Status Text */
-        #status { text-align: center; font-size: 18px; color: #ffeb3b; font-family: monospace; }
+        .btn-scan { background:#00ff00; color:#000; }
+        .btn-dl   { background:#2196F3; color:#fff; }
+        button:active { transform:scale(0.97); }
     </style>
 </head>
 <body>
 
-    <!-- Camera View -->
     <div class="cam-area">
-        <video id="video" playsinline autoplay></video>
+        <video id="video" playsinline autoplay muted></video>
         <div class="scan-box"></div>
     </div>
 
-    <!-- Control Panel -->
     <div class="controls">
-        
-        <!-- Computer Vision Preview -->
-        <div style="text-align:center; font-size:12px; color:#aaa;">COMPUTER SEES:</div>
-        <div class="debug-row">
+        <div style="text-align:center;font-size:12px;color:#666;">COMPUTER SEES:</div>
+        <div style="display:flex;justify-content:center;">
             <canvas id="c"></canvas>
         </div>
 
-        <div id="status">Ready</div>
+        <div id="status">Initializing camera...</div>
 
-        <!-- Adjuster -->
         <div class="slider-row">
-            <label>Darkness Level (Fix Glare)</label>
-            <input type="range" id="thresh" min="0" max="255" value="110">
+            <label>Threshold (adjust for glare) <span id="val">110</span></label>
+            <input type="range" id="thresh" min="50" max="200" value="110">
         </div>
 
-        <!-- Buttons -->
         <div class="btn-row">
-            <button class="btn-scan" id="snapBtn" onclick="runMobileScan()">SCAN</button>
+            <button class="btn-scan" id="snapBtn">SCAN</button>
             <button class="btn-dl" onclick="downloadExcel()">EXCEL</button>
         </div>
     </div>
 
 <script>
-    const video = document.getElementById('video');
-    const canvas = document.getElementById('c');
-    const ctx = canvas.getContext('2d');
-    const status = document.getElementById('status');
-    let stream;
-    let dataList = [];
+    const video   = document.getElementById('video');
+    const canvas  = document.getElementById('c');
+    const ctx     = canvas.getContext('2d');
+    const status  = document.getElementById('status');
+    const threshSlider = document.getElementById('thresh');
+    const valSpan = document.getElementById('val');
+    const snapBtn = document.getElementById('snapBtn');
 
-    // 1. Initialize Phone Camera
-    async function initMobileCam() {
+    let dataList = [];
+    let worker = null;
+
+    // Update threshold value display
+    threshSlider.addEventListener('input', () => {
+        valSpan.textContent = threshSlider.value;
+    });
+
+    // ==================== 1. CAMERA INIT ====================
+    async function initCamera() {
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
+            const stream = await navigator.mediaDevices.getUserMedia({
                 video: {
-                    facingMode: { exact: "environment" }, // Forces Back Camera
-                    width: { ideal: 1920 },
-                    height: { ideal: 1080 }
-                }
+                    facingMode: { ideal: "environment" },
+                    width: { ideal: 4096 },
+                    height: { ideal: 2160 }
+                },
+                audio: false
             });
             video.srcObject = stream;
-            
-            // Start the preview loop
+            video.play();
+            status.textContent = "Camera ready – align code";
+            status.style.color = "#00ff00";
+
+            // Initialize Tesseract worker once
+            worker = await Tesseract.createWorker({
+                logger: m => console.log(m)
+            });
+            await worker.load();
+            await worker.loadLanguage('eng');
+            await worker.initialize('eng');
+            await worker.setParameters({
+                tessedit_char_whitelist: '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ',
+            });
+
             requestAnimationFrame(previewLoop);
-            
         } catch (err) {
-            // Fallback if "exact environment" fails (some old phones)
-            try {
-                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-                video.srcObject = stream;
-                requestAnimationFrame(previewLoop);
-            } catch (e) {
-                alert("Camera Error: " + e.message + "\n(Make sure you are using HTTPS!)");
-            }
+            status.textContent = "Camera blocked or not available";
+            status.style.color = "red";
+            console.error(err);
         }
     }
-    initMobileCam();
 
-    // 2. The Loop (Shows what the computer sees)
+    // ==================== 2. PREVIEW LOOP (FIXED CROPPING) ====================
     function previewLoop() {
-        if (video.readyState === 4) {
-            // Draw logic specific for mobile portrait
-            const w = 250; const h = 50;
-            canvas.width = w; canvas.height = h;
-
-            // Crop the center of the video feed
-            const vw = video.videoWidth;
-            const vh = video.videoHeight;
-            
-            // On mobile portrait, video is tall. 
-            // We want the center slice.
-            const sx = (vw * 0.1); // Start 10% in
-            const sw = (vw * 0.8); // Take 80% width
-            const sh = sw * (h/w); // Calculate height based on aspect ratio
-            const sy = (vh - sh) / 2; // Center Y
-
-            ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
-
-            // Apply "Darkness" Filter
-            let imgData = ctx.getImageData(0,0,w,h);
-            let d = imgData.data;
-            let limit = parseInt(document.getElementById('thresh').value);
-
-            for (let i = 0; i < d.length; i += 4) {
-                let gray = (d[i] + d[i+1] + d[i+2]) / 3;
-                // High Contrast: If dark, stay black. If light, become white.
-                // KKM Holograms: We want to darken the background so text pops.
-                let val = (gray > limit) ? 255 : 0;
-                d[i] = d[i+1] = d[i+2] = val;
-            }
-            ctx.putImageData(imgData, 0, 0);
+        if (video.readyState !== video.HAVE_ENOUGH_DATA) {
+            requestAnimationFrame(previewLoop);
+            return;
         }
+
+        const TARGET_W = 280;
+        const TARGET_H = 56;
+        canvas.width = TARGET_W;
+        canvas.height = TARGET_H;
+
+        const vw = video.videoWidth;
+        const vh = video.videoHeight;
+        if (vw === 0 || vh === 0) { requestAnimationFrame(previewLoop); return; }
+
+        const videoAspect = vw / vh;
+        const displayAspect = video.clientWidth / video.clientHeight;
+
+        let sx, sy, sw, sh;
+
+        if (videoAspect > displayAspect) {
+            // Letterboxed top/bottom → crop horizontally centered, middle 50%
+            const scaledH = video.clientWidth / videoAspect;
+            const cropY = (video.clientHeight - scaledH) / 2 + video.clientHeight * 0.25;
+            const cropH = video.clientHeight * 0.5;
+
+            sx = 0;
+            sy = (cropY / video.clientHeight) * vh;
+            sw = vw;
+            sh = (cropH / video.clientHeight) * vh;
+        } else {
+            // Pillarboxed sides → crop vertically centered, 80% width
+            const scaledW = video.clientHeight * videoAspect;
+            const cropX = (video.clientWidth - scaledW) / 2 + video.clientWidth * 0.10;
+            const cropW = video.clientWidth * 0.80;
+
+            sx = (cropX / video.clientWidth) * vw;
+            sy = 0;
+            sw = (cropW / video.clientWidth) * vw;
+            sh = vh;
+        }
+
+        ctx.drawImage(video, sx, sy, sw, sh, 0, 0, TARGET_W, TARGET_H);
+
+        // High-contrast threshold
+        const thresh = parseInt(threshSlider.value);
+        const imgData = ctx.getImageData(0, 0, TARGET_W, TARGET_H);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+            const gray = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+            const val = gray > thresh ? 255 : 0;
+            d[i] = d[i+1] = d[i+2] = val;
+        }
+        ctx.putImageData(imgData, 0, 0);
+
         requestAnimationFrame(previewLoop);
     }
 
-    // 3. Scan Logic
-    async function runMobileScan() {
-        const btn = document.getElementById('snapBtn');
-        btn.disabled = true;
-        btn.innerText = "...";
-        status.innerText = "Reading...";
-        status.style.color = "white";
+    // ==================== 3. SCAN BUTTON ====================
+    snapBtn.addEventListener('click', async () => {
+        if (!worker) return;
+        snapBtn.disabled = true;
+        snapBtn.textContent = "Reading...";
+        status.textContent = "Processing...";
+        status.style.color = "#fff";
 
         try {
-            const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
-                tessedit_char_whitelist: '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ'
-            });
-
+            const result = await worker.recognize(canvas);
+            let text = result.data.text.toUpperCase();
             const clean = text.replace(/[^A-Z0-9]/g, '');
 
-            // Mobile screens shake more, so we validate carefully
-            if (clean.length > 5 && /[0-9]/.test(clean)) {
-                status.innerText = "FOUND: " + clean;
+            if (clean.length >= 6 && /[0-9]/.test(clean)) {
+                status.textContent = "FOUND: " + clean;
                 status.style.color = "#00ff00";
-                dataList.push({ "Code": clean, "Time": new Date().toLocaleTimeString() });
+                dataList.push({ Code: clean, Time: new Date().toLocaleString() });
+
+                // Vibration feedback
+                if ('vibrate' in navigator) navigator.vibrate(200);
             } else {
-                status.innerText = "Try Again (Adjust Slider)";
+                status.textContent = "Not clear – try again";
                 status.style.color = "orange";
             }
         } catch (e) {
-            status.innerText = "Error";
+            console.error(e);
+            status.textContent = "OCR Error";
+            status.style.color = "red";
         }
 
         setTimeout(() => {
-            btn.disabled = false;
-            btn.innerText = "SCAN";
-        }, 1000);
-    }
+            snapBtn.disabled = false;
+            snapBtn.textContent = "SCAN";
+        }, 800);
+    });
 
+    // ==================== 4. EXCEL DOWNLOAD ====================
     function downloadExcel() {
-        if(dataList.length === 0) return alert("Scan something first!");
+        if (dataList.length === 0) {
+            alert("No scans yet!");
+            return;
+        }
         const ws = XLSX.utils.json_to_sheet(dataList);
         const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, "MobileScans");
-        XLSX.writeFile(wb, "KKM_Mobile.xlsx");
+        XLSX.utils.book_append_sheet(wb, ws, "KKM_Scans");
+        XLSX.writeFile(wb, `KKM_Scans_${new Date().toISOString().slice(0,10)}.xlsx`);
     }
+
+    // Start everything
+    initCamera();
 </script>
 </body>
 </html>
