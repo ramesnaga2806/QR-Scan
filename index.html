@@ -2,25 +2,19 @@
 <html>
 <head>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Ultra Sticker Number Scanner</title>
+<title>Sticker Scanner with Excel Export</title>
+
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
 <style>
   body { font-family: Arial; }
   video { width: 100%; }
-  #guide {
-    position: absolute;
-    top: 65%;
-    left: 50%;
-    width: 80%;
-    height: 20%;
-    transform: translateX(-50%);
-    border: 3px solid red;
-    border-radius: 10px;
-  }
+  #controls { margin-top: 15px; }
+  #controls label { font-size: 16px; display:block; margin-top:10px; }
   #result {
     margin-top: 15px;
-    font-size: 30px;
+    font-size: 28px;
     font-weight: bold;
     color: green;
   }
@@ -28,20 +22,41 @@
 </head>
 <body>
 
-<h3>Sticker Number Scanner</h3>
+<h2>Sticker Number Scanner</h2>
+
 <button onclick="startCamera()">Start Camera</button>
 
-<div style="position:relative;">
-  <video id="video" autoplay playsinline></video>
-  <div id="guide"></div>
+<video id="video" autoplay playsinline></video>
+
+<div id="controls">
+  <label>Zoom:
+    <input type="range" id="zoomSlider" min="1" max="10" step="0.1" value="1" oninput="applyZoom()">
+  </label>
+
+  <label>Brightness:
+    <input type="range" id="brightSlider" min="0" max="300" value="100" oninput="updateFilters()">
+  </label>
+
+  <label>Contrast:
+    <input type="range" id="contrastSlider" min="50" max="300" value="150" oninput="updateFilters()">
+  </label>
+
+  <label>Grayscale:
+    <input type="range" id="graySlider" min="0" max="100" value="0" oninput="updateFilters()">
+  </label>
 </div>
 
+<button onclick="capture()">Scan</button>
+<button onclick="downloadExcel()">Download Excel</button>
+
 <canvas id="canvas" style="display:none;"></canvas>
+
 <div id="result"></div>
 
 <script>
 let stream;
-let scanning = false;
+let maxZoom = 1;
+let scannedList = [];   // Store all scanned numbers
 
 async function startCamera() {
   stream = await navigator.mediaDevices.getUserMedia({
@@ -54,29 +69,28 @@ async function startCamera() {
   const track = stream.getVideoTracks()[0];
   const cap = track.getCapabilities();
 
-  // (1) AUTO-FOCUS LOCK
-  if (cap.focusMode) {
-    await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
-  }
-
-  // (5) MAX ZOOM
   if (cap.zoom) {
-    await track.applyConstraints({ advanced: [{ zoom: cap.zoom.max }] });
-  }
-
-  if (!scanning) {
-    scanning = true;
-    autoCapture();
+    maxZoom = cap.zoom.max;
+    document.getElementById("zoomSlider").max = maxZoom;
   }
 }
 
-async function autoCapture() {
-  if (!scanning) return;
+function applyZoom() {
+  const zoomValue = parseFloat(document.getElementById("zoomSlider").value);
+  const track = stream.getVideoTracks()[0];
 
-  await capture();
+  track.applyConstraints({
+    advanced: [{ zoom: zoomValue }]
+  });
+}
 
-  // (2) AUTO-CAPTURE EVERY 0.5 SEC
-  setTimeout(autoCapture, 500);
+function updateFilters() {
+  const b = document.getElementById("brightSlider").value;
+  const c = document.getElementById("contrastSlider").value;
+  const g = document.getElementById("graySlider").value;
+
+  document.getElementById("video").style.filter =
+    `brightness(${b}%) contrast(${c}%) grayscale(${g}%)`;
 }
 
 async function capture() {
@@ -89,38 +103,41 @@ async function capture() {
 
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  // (4) BIGGER CROP AREA (bottom 35%)
-  const cropHeight = canvas.height * 0.35;
-  const cropY = canvas.height - cropHeight;
+  const result = await Tesseract.recognize(canvas, "eng");
 
-  const crop = document.createElement("canvas");
-  crop.width = canvas.width;
-  crop.height = cropHeight;
-
-  const cctx = crop.getContext("2d");
-  cctx.drawImage(canvas, 0, cropY, canvas.width, cropHeight, 0, 0, canvas.width, cropHeight);
-
-  // IMAGE ENHANCEMENT FOR OCR
-  let img = cctx.getImageData(0, 0, crop.width, crop.height);
-  let d = img.data;
-
-  for (let i = 0; i < d.length; i += 4) {
-    let avg = (d[i] + d[i+1] + d[i+2]) / 3;
-    avg = avg > 140 ? 255 : 0;
-    d[i] = d[i+1] = d[i+2] = avg;
-  }
-
-  cctx.putImageData(img, 0, 0);
-
-  // OCR
-  const res = await Tesseract.recognize(crop, "eng");
-
-  // STRICT MATCH 077347722EA FORMAT
-  const match = res.data.text.match(/[0-9]{9}[A-Z]{2}/);
+  const match = result.data.text.match(/[0-9]{9}[A-Z]{2}/);
 
   if (match) {
-    document.getElementById("result").innerText = "Detected: " + match[0];
+    const code = match[0];
+    document.getElementById("result").innerText = "Detected: " + code;
+
+    // Add to list (avoid duplicates in a row)
+    if (scannedList[scannedList.length - 1] !== code) {
+      scannedList.push(code);
+    }
   }
+}
+
+// --------------------------
+// DOWNLOAD EXCEL FUNCTION
+// --------------------------
+function downloadExcel() {
+  if (scannedList.length === 0) {
+    alert("No data to download.");
+    return;
+  }
+
+  const wsData = [["Sticker Number"]];
+
+  scannedList.forEach(num => {
+    wsData.push([num]);
+  });
+
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Scans");
+
+  XLSX.writeFile(wb, "Sticker_Scan_List.xlsx");
 }
 </script>
 
