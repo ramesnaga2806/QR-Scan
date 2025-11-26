@@ -1,78 +1,241 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sticker Number Scanner</title>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
-<style>
-  video {
-    width: 100%;
-    transform: scale(1.8); /* zoom video */
-  }
-  #result {
-    font-size: 30px;
-    font-weight: bold;
-    color: green;
-    margin-top: 10px;
-  }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Mobile KKM Scanner</title>
+    <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <style>
+        body { 
+            background-color: #000; 
+            color: #fff; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            margin: 0; 
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* 1. Camera Section (Top Half) */
+        .cam-area {
+            position: relative;
+            flex: 1; /* Takes up available space */
+            background: #222;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        /* The Green Target Box */
+        .scan-box {
+            position: absolute;
+            width: 80%;
+            height: 50px;
+            border: 3px solid #00ff00;
+            box-shadow: 0 0 0 100vmax rgba(0,0,0,0.6); /* Darkens the rest */
+            z-index: 10;
+        }
+        .scan-box::after {
+            content: "Align Number Here";
+            position: absolute; top: -25px; left: 0; width: 100%; 
+            text-align: center; font-size: 14px; font-weight: bold; text-shadow: 1px 1px 2px black;
+        }
+
+        /* 2. Controls Section (Bottom Half) */
+        .controls {
+            flex: 1;
+            background: #111;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            border-top: 2px solid #333;
+        }
+
+        /* Debug Canvas (Hidden but used for processing) */
+        .debug-row { display: flex; justify-content: center; margin-bottom: 5px; }
+        canvas { 
+            border: 2px solid #fff; 
+            height: 50px; 
+            width: 250px; 
+            background: #000; 
+        }
+
+        /* Sliders */
+        .slider-row { display: flex; flex-direction: column; gap: 5px; }
+        label { font-size: 14px; color: #aaa; }
+        input[type=range] { width: 100%; height: 30px; }
+
+        /* Big Buttons for Thumbs */
+        .btn-row { display: flex; gap: 10px; margin-top: auto; }
+        button {
+            flex: 1;
+            padding: 20px;
+            border: none;
+            border-radius: 12px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .btn-scan { background: #00ff00; color: #000; }
+        .btn-dl { background: #2196F3; color: #fff; }
+        button:active { transform: scale(0.98); }
+
+        /* Status Text */
+        #status { text-align: center; font-size: 18px; color: #ffeb3b; font-family: monospace; }
+    </style>
 </head>
 <body>
 
-<h3>Scan Sticker Number</h3>
-<button onclick="startCamera()">Open Camera</button>
-<button onclick="capture()">Capture & Detect</button>
+    <!-- Camera View -->
+    <div class="cam-area">
+        <video id="video" playsinline autoplay></video>
+        <div class="scan-box"></div>
+    </div>
 
-<br><br>
-<video id="video" autoplay playsinline></video>
-<canvas id="canvas" style="display:none;"></canvas>
+    <!-- Control Panel -->
+    <div class="controls">
+        
+        <!-- Computer Vision Preview -->
+        <div style="text-align:center; font-size:12px; color:#aaa;">COMPUTER SEES:</div>
+        <div class="debug-row">
+            <canvas id="c"></canvas>
+        </div>
 
-<div id="result"></div>
+        <div id="status">Ready</div>
+
+        <!-- Adjuster -->
+        <div class="slider-row">
+            <label>Darkness Level (Fix Glare)</label>
+            <input type="range" id="thresh" min="0" max="255" value="110">
+        </div>
+
+        <!-- Buttons -->
+        <div class="btn-row">
+            <button class="btn-scan" id="snapBtn" onclick="runMobileScan()">SCAN</button>
+            <button class="btn-dl" onclick="downloadExcel()">EXCEL</button>
+        </div>
+    </div>
 
 <script>
-let stream;
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    let stream;
+    let dataList = [];
 
-async function startCamera() {
-  stream = await navigator.mediaDevices.getUserMedia({
-    video: {
-      facingMode: "environment",
-      zoom: 4   // strong zoom (max supported by phone)
+    // 1. Initialize Phone Camera
+    async function initMobileCam() {
+        try {
+            stream = await navigator.mediaDevices.getUserMedia({
+                video: {
+                    facingMode: { exact: "environment" }, // Forces Back Camera
+                    width: { ideal: 1920 },
+                    height: { ideal: 1080 }
+                }
+            });
+            video.srcObject = stream;
+            
+            // Start the preview loop
+            requestAnimationFrame(previewLoop);
+            
+        } catch (err) {
+            // Fallback if "exact environment" fails (some old phones)
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+                video.srcObject = stream;
+                requestAnimationFrame(previewLoop);
+            } catch (e) {
+                alert("Camera Error: " + e.message + "\n(Make sure you are using HTTPS!)");
+            }
+        }
     }
-  });
-  document.getElementById("video").srcObject = stream;
+    initMobileCam();
 
-  // Try to set maximum zoom if device supports it
-  const [track] = stream.getVideoTracks();
-  const capabilities = track.getCapabilities();
-  if (capabilities.zoom) {
-    track.applyConstraints({ advanced: [{ zoom: capabilities.zoom.max }] });
-  }
-}
+    // 2. The Loop (Shows what the computer sees)
+    function previewLoop() {
+        if (video.readyState === 4) {
+            // Draw logic specific for mobile portrait
+            const w = 250; const h = 50;
+            canvas.width = w; canvas.height = h;
 
-async function capture() {
-  const video = document.getElementById("video");
-  const canvas = document.getElementById("canvas");
-  const ctx = canvas.getContext("2d");
+            // Crop the center of the video feed
+            const vw = video.videoWidth;
+            const vh = video.videoHeight;
+            
+            // On mobile portrait, video is tall. 
+            // We want the center slice.
+            const sx = (vw * 0.1); // Start 10% in
+            const sw = (vw * 0.8); // Take 80% width
+            const sh = sw * (h/w); // Calculate height based on aspect ratio
+            const sy = (vh - sh) / 2; // Center Y
 
-  canvas.width = video.videoWidth;
-  canvas.height = video.videoHeight;
+            ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
 
-  // Take photo
-  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            // Apply "Darkness" Filter
+            let imgData = ctx.getImageData(0,0,w,h);
+            let d = imgData.data;
+            let limit = parseInt(document.getElementById('thresh').value);
 
-  // OCR
-  const text = await Tesseract.recognize(canvas, "eng");
+            for (let i = 0; i < d.length; i += 4) {
+                let gray = (d[i] + d[i+1] + d[i+2]) / 3;
+                // High Contrast: If dark, stay black. If light, become white.
+                // KKM Holograms: We want to darken the background so text pops.
+                let val = (gray > limit) ? 255 : 0;
+                d[i] = d[i+1] = d[i+2] = val;
+            }
+            ctx.putImageData(imgData, 0, 0);
+        }
+        requestAnimationFrame(previewLoop);
+    }
 
-  // Extract ONLY sticker number (e.g., 077347722EA)
-  const match = text.data.text.match(/[0-9]{9}[A-Z]{2}/);
+    // 3. Scan Logic
+    async function runMobileScan() {
+        const btn = document.getElementById('snapBtn');
+        btn.disabled = true;
+        btn.innerText = "...";
+        status.innerText = "Reading...";
+        status.style.color = "white";
 
-  if (match) {
-    document.getElementById("result").innerText = "Detected: " + match[0];
-  } else {
-    document.getElementById("result").innerText = "Number not clear — try closer";
-  }
-}
+        try {
+            const { data: { text } } = await Tesseract.recognize(canvas, 'eng', {
+                tessedit_char_whitelist: '0123456789ABCDEFGHJKLMNPQRSTUVWXYZ'
+            });
+
+            const clean = text.replace(/[^A-Z0-9]/g, '');
+
+            // Mobile screens shake more, so we validate carefully
+            if (clean.length > 5 && /[0-9]/.test(clean)) {
+                status.innerText = "FOUND: " + clean;
+                status.style.color = "#00ff00";
+                dataList.push({ "Code": clean, "Time": new Date().toLocaleTimeString() });
+            } else {
+                status.innerText = "Try Again (Adjust Slider)";
+                status.style.color = "orange";
+            }
+        } catch (e) {
+            status.innerText = "Error";
+        }
+
+        setTimeout(() => {
+            btn.disabled = false;
+            btn.innerText = "SCAN";
+        }, 1000);
+    }
+
+    function downloadExcel() {
+        if(dataList.length === 0) return alert("Scan something first!");
+        const ws = XLSX.utils.json_to_sheet(dataList);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "MobileScans");
+        XLSX.writeFile(wb, "KKM_Mobile.xlsx");
+    }
 </script>
-
 </body>
 </html>
