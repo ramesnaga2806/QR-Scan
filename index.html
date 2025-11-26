@@ -1,97 +1,77 @@
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>Sticker-Only Scanner</title>
-
-<script src="https://unpkg.com/tesseract.js@2.1.5/dist/tesseract.min.js"></script>
-
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sticker Number Scanner</title>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@4/dist/tesseract.min.js"></script>
 <style>
-  body { font-family: Arial; padding: 20px; }
-  video { width: 100%; max-width: 350px; border: 1px solid #ccc; border-radius: 10px; }
-  #result { margin-top: 15px; padding: 10px; border: 1px solid #ccc; }
-  button { padding: 12px; margin-top: 10px; width: 100%; font-size: 18px; }
-  .scan-area {
-    position: absolute;
-    border: 3px solid red;
-    width: 70%;
-    height: 22%;
-    bottom: 15%;
-    left: 15%;
-    pointer-events: none;
+  video {
+    width: 100%;
+    transform: scale(1.8); /* zoom video */
   }
-  #wrapper {
-    position: relative;
-    display: inline-block;
+  #result {
+    font-size: 30px;
+    font-weight: bold;
+    color: green;
+    margin-top: 10px;
   }
 </style>
-
 </head>
 <body>
 
-<h2>Sticker-Only Detection Scanner</h2>
+<h3>Scan Sticker Number</h3>
+<button onclick="startCamera()">Open Camera</button>
+<button onclick="capture()">Capture & Detect</button>
 
-<div id="wrapper">
-  <video id="camera" autoplay playsinline></video>
-  <!-- This red box shows the scanning zone -->
-  <div class="scan-area"></div>
-</div>
+<br><br>
+<video id="video" autoplay playsinline></video>
+<canvas id="canvas" style="display:none;"></canvas>
 
-<button id="scanBtn">SCAN STICKER</button>
-<div id="result">Waiting for scan…</div>
+<div id="result"></div>
 
 <script>
-const video = document.getElementById("camera");
+let stream;
 
-// Start camera
-navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-.then(stream => { video.srcObject = stream; })
-.catch(err => alert("Camera error: " + err));
-
-document.getElementById("scanBtn").addEventListener("click", async () => {
-    document.getElementById("result").textContent = "Reading sticker…";
-
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-
-    // Crop only the sticker area (bottom middle)
-    const cropWidth = vw * 0.70;
-    const cropHeight = vh * 0.22;
-    const cropX = vw * 0.15;
-    const cropY = vh * 0.63;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = cropWidth;
-    canvas.height = cropHeight;
-    const ctx = canvas.getContext("2d");
-
-    ctx.drawImage(video, cropX, cropY, cropWidth, cropHeight, 0, 0, cropWidth, cropHeight);
-
-    const dataURL = canvas.toDataURL("image/png");
-
-    const { createWorker } = Tesseract;
-    const worker = createWorker();
-
-    // Restrict OCR to sticker content characters only
-    await worker.load();
-    await worker.loadLanguage("eng");
-    await worker.initialize("eng");
-    await worker.setParameters({
-        tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-    });
-
-    const { data: { text } } = await worker.recognize(dataURL);
-    await worker.terminate();
-
-    let code = text.replace(/[^A-Z0-9]/gi, "").trim();
-
-    if (!code) {
-        document.getElementById("result").textContent = "❌ Unable to detect sticker info. Make sure the number is inside the red box.";
-        return;
+async function startCamera() {
+  stream = await navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: "environment",
+      zoom: 4   // strong zoom (max supported by phone)
     }
+  });
+  document.getElementById("video").srcObject = stream;
 
-    document.getElementById("result").textContent = "✔ Sticker Info: " + code;
-});
+  // Try to set maximum zoom if device supports it
+  const [track] = stream.getVideoTracks();
+  const capabilities = track.getCapabilities();
+  if (capabilities.zoom) {
+    track.applyConstraints({ advanced: [{ zoom: capabilities.zoom.max }] });
+  }
+}
+
+async function capture() {
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d");
+
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+
+  // Take photo
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  // OCR
+  const text = await Tesseract.recognize(canvas, "eng");
+
+  // Extract ONLY sticker number (e.g., 077347722EA)
+  const match = text.data.text.match(/[0-9]{9}[A-Z]{2}/);
+
+  if (match) {
+    document.getElementById("result").innerText = "Detected: " + match[0];
+  } else {
+    document.getElementById("result").innerText = "Number not clear — try closer";
+  }
+}
 </script>
 
 </body>
